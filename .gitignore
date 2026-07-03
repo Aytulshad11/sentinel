@@ -1,0 +1,25 @@
+node_modules/
+dist/
+build/
+*.log
+.env
+.env.local
+.env.*.local
+coverage/
+.DS_Store
+Thumbs.db
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl
+
+# Kubernetes local
+kubeconfig*.yaml
+
+# IDE
+.vscode/
+.idea/
