@@ -6,6 +6,7 @@ export const config = {
   ordersQueueName: "orders",
   dlqName: "orders-dlq",
   concurrency: Number(process.env.WORKER_CONCURRENCY ?? 5),
+  logLevel: process.env.LOG_LEVEL ?? "info",
   // Simulated downstream (notification service) failure rate, used to exercise
   // BullMQ's retry/backoff path until the real notification-service exists.
   simulatedDownstreamFailureRate: Number(process.env.SIMULATED_DOWNSTREAM_FAILURE_RATE ?? 0.3),

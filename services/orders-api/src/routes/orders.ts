@@ -30,6 +30,10 @@ ordersRouter.post("/orders", async (req, res) => {
 
   const existing = await pool.query("SELECT * FROM orders WHERE idempotency_key = $1", [idempotencyKey]);
   if (existing.rows.length > 0) {
+    req.log.info(
+      { event: "idempotent_replay", order_id: existing.rows[0].id, idempotency_key: idempotencyKey },
+      "idempotency key replay, returning existing order"
+    );
     return res.status(200).json(existing.rows[0]);
   }
 
@@ -49,6 +53,10 @@ ordersRouter.post("/orders", async (req, res) => {
       // Lost the race to a concurrent request with the same key.
       await client.query("ROLLBACK");
       const raced = await pool.query("SELECT * FROM orders WHERE idempotency_key = $1", [idempotencyKey]);
+      req.log.warn(
+        { event: "idempotency_race_lost", idempotency_key: idempotencyKey },
+        "lost insert race to a concurrent request with the same idempotency key"
+      );
       return res.status(200).json(raced.rows[0]);
     }
 

@@ -2,6 +2,7 @@ import { Queue, Worker, type Job } from "bullmq";
 import IORedis from "ioredis";
 import { config } from "./config";
 import { pool } from "./db/pool";
+import { logger } from "./logger";
 
 const connection = new IORedis(config.redisUrl, { maxRetriesPerRequest: null });
 const dlq = new Queue(config.dlqName, { connection });
@@ -35,7 +36,10 @@ async function processOrder(job: Job<{ orderId: string }>) {
   const lockKey = `lock:order:${orderId}`;
   const acquired = await connection.set(lockKey, job.id ?? "1", "EX", 30, "NX");
   if (!acquired) {
-    console.warn(`order ${orderId} already locked by another worker, skipping duplicate delivery`);
+    logger.warn(
+      { event: "duplicate_delivery_skipped", order_id: orderId, job_id: job.id },
+      "order already locked by another worker, skipping duplicate delivery"
+    );
     return;
   }
 
@@ -45,7 +49,10 @@ async function processOrder(job: Job<{ orderId: string }>) {
     if (!order) throw new Error(`order ${orderId} not found`);
 
     if (order.status === "completed") {
-      console.log(`order ${orderId} already completed, skipping (idempotent replay)`);
+      logger.info(
+        { event: "order_already_completed", order_id: orderId, job_id: job.id },
+        "order already completed, skipping (idempotent replay)"
+      );
       return;
     }
 
@@ -54,7 +61,7 @@ async function processOrder(job: Job<{ orderId: string }>) {
     await callDownstreamNotification(orderId);
 
     await transition(orderId, "processing", "completed");
-    console.log(`order ${orderId} completed`);
+    logger.info({ event: "order_completed", order_id: orderId, job_id: job.id }, "order completed");
   } finally {
     await connection.del(lockKey);
   }
@@ -66,24 +73,30 @@ const worker = new Worker(config.ordersQueueName, processOrder, {
 });
 
 worker.on("completed", (job) => {
-  console.log(`job ${job.id} completed`);
+  logger.info({ event: "job_completed", job_id: job.id }, "job completed");
 });
 
 worker.on("failed", async (job, err) => {
   if (!job) return;
   const attemptsMax = job.opts.attempts ?? 1;
-  console.error(`job ${job.id} failed (attempt ${job.attemptsMade}/${attemptsMax}): ${err.message}`);
+  logger.error(
+    { event: "job_failed", job_id: job.id, attempts_made: job.attemptsMade, attempts_max: attemptsMax, err },
+    `job failed (attempt ${job.attemptsMade}/${attemptsMax}): ${err.message}`
+  );
 
   if (job.attemptsMade >= attemptsMax) {
     // Retries exhausted: park the order as failed and route to the DLQ for
     // manual/automated inspection instead of silently dropping it.
     const { orderId } = job.data as { orderId: string };
     await transition(orderId, "processing", "failed", err.message).catch((e) =>
-      console.error("failed to record final failure", e)
+      logger.error({ event: "order_failure_record_error", order_id: orderId, err: e }, "failed to record final failure")
     );
     await dlq.add("dead-order", { orderId, reason: err.message, originalJobId: job.id });
-    console.error(`order ${orderId} moved to DLQ after exhausting retries`);
+    logger.error(
+      { event: "order_dlq_routed", order_id: orderId, reason: err.message, original_job_id: job.id },
+      "order moved to DLQ after exhausting retries"
+    );
   }
 });
 
-console.log("orders-worker started, waiting for jobs...");
+logger.info({ event: "worker_started" }, "orders-worker started, waiting for jobs...");

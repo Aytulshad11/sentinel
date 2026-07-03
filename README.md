@@ -4,8 +4,10 @@ A portfolio project demonstrating Backend / Platform / SRE engineering depth: a 
 order-processing system built to fail in interesting, instrumented ways, then hardened
 through Kubernetes, Terraform/AWS, observability, SLOs, and chaos engineering.
 
-See [ROADMAP.md](./ROADMAP.md) for the full phased plan, weekly milestones, and the
-reasoning behind each design decision.
+See [PRD.md](./PRD.md) for requirements, rationale, and the decision log (the single
+source of truth for *what* and *why* — it changes as decisions change). See
+[ROADMAP.md](./ROADMAP.md) for the full phased plan and weekly milestones (the source
+of truth for *when*).
 
 ## Status
 
@@ -16,6 +18,7 @@ behind Postgres and Redis/BullMQ, runnable locally via `docker-compose`.
 - [x] `orders-api`: `POST /orders` (idempotent, via `Idempotency-Key` header), `GET /orders/:id`, `/health`
 - [x] `orders-worker`: BullMQ consumer with Redis-lock idempotency, order state machine, retry/backoff, DLQ routing on exhausted retries
 - [x] Postgres schema: `orders` (state machine) + `order_events` (audit trail)
+- [x] Structured JSON logging (`pino`/`pino-http`) across both services, designed for machine/AI-agent consumption — see [PRD.md §9](./PRD.md#9-observability--ai-agent-readiness)
 - [ ] `notification-service` (currently simulated in-process by the worker, with a configurable random failure rate to exercise retries)
 - [ ] Kubernetes, Terraform, observability, SLOs, chaos experiments — see roadmap phases 2-8
 
@@ -48,6 +51,20 @@ layered three ways so a retried request can't double-process an order:
    the same key is a no-op at the queue layer.
 3. **Redis lock in the worker** (`SET NX EX 30`) — guards against two worker processes
    concurrently handling a redelivered/duplicated message for the same order.
+
+## Structured logging
+
+Both services log JSON (via `pino`), not plain text — every line has a `service` and
+`event` field, and API requests carry a `request_id` (returned as `X-Request-Id`) that
+correlates every log line for that request, including downstream `event`-tagged lines.
+This is deliberate: logs are designed to be queried by field, not grepped by message
+string, so tooling (dashboards, alert rules, or a future AI agent) can consume them
+without service-specific parsing. See [PRD.md §9](./PRD.md#9-observability--ai-agent-readiness)
+for the full schema and the reasoning.
+
+```bash
+docker compose logs -f orders-api | jq 'select(.event == "idempotent_replay")'
+```
 
 ## Quickstart
 
